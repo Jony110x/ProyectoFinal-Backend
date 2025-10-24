@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: proyecto-final-backend
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn app:app --host 0.0.0.0 --port 10000"
+    envVars:
+      - key: DATABASE_URL
+        value: "postgresql://proyectofinal_l186_user:VACfvZBCDASb4E0ffJUK6ecjrL1x8ldc@dpg-d3tcakn5r7bs73emq7fg-a/proyectofinal_l186"
