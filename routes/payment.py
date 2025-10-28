@@ -248,7 +248,13 @@ async def get_payments_paginated(
 
 
 @payment.get("/payment/search")
-def search_payments(q: str, limit: int = 20, offset: int = 0, req: Request = None):
+def search_payments(
+    q: str, 
+    limit: int = 20, 
+    offset: int = 0, 
+    user_id: Optional[int] = None,  # ← AGREGAR ESTE PARÁMETRO
+    req: Request = None
+):
     try:
         # Verificar token
         has_access = Security.verify_token(req.headers)
@@ -261,6 +267,10 @@ def search_payments(q: str, limit: int = 20, offset: int = 0, req: Request = Non
             .join(User, Payment.user_id == User.id)
             .join(Carer, Payment.carer_id == Carer.id)
         )
+
+        # ✅ FILTRO POR USER_ID (NUEVO)
+        if user_id is not None:
+            query = query.filter(Payment.user_id == user_id)
 
         # Filtro por término de búsqueda (usuario o materia)
         q_like = f"%{q}%"
