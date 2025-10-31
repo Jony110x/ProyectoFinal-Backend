@@ -11,6 +11,17 @@ from models.modelo import (
 import datetime
 import os
 import shutil
+import cloudinary
+import cloudinary.uploader
+from cloudinary.utils import cloudinary_url
+
+# Configuración 
+cloudinary.config(
+    cloud_name="dydhfghau",
+    api_key="231924475335554",
+    api_secret="ZytmRYQuMFnRJHEGDYFjN17QTro",
+    secure=True
+)
 
 message = APIRouter()
 
@@ -24,7 +35,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 async def send_message(
     sender_id: int = Form(...),
     receiver_id: int = Form(...),
-    content: str = Form(""),  # Valor por defecto vacío
+    content: str = Form(""),
     file: UploadFile = File(None)
 ):
     try:
@@ -45,20 +56,27 @@ async def send_message(
                 detail="Usuario no encontrado"
             )
 
-        # Manejar archivo adjunto
+        # Manejar archivo adjunto con Cloudinary
         archivo_url = None
         if file and file.filename:
-            # Generar nombre único para el archivo
-            timestamp = str(int(datetime.datetime.now().timestamp()))
-            filename = f"{timestamp}_{file.filename}"
-            filepath = os.path.join(UPLOAD_DIR, filename)
-            
-            # Guardar archivo
-            with open(filepath, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-            
-            # Generar URL completa
-            archivo_url = f"{BASE_URL}/{UPLOAD_DIR}/{filename}"
+            try:
+                # Subir archivo a Cloudinary
+                result = cloudinary.uploader.upload(
+                    file.file,
+                    folder="mensajes_adjuntos",  # Carpeta en Cloudinary
+                    resource_type="auto",  # Detecta automáticamente el tipo
+                    public_id=f"{int(datetime.datetime.now().timestamp())}_{file.filename.split('.')[0]}"
+                )
+                
+                # Obtener la URL segura del archivo
+                archivo_url = result.get("secure_url")
+                
+            except Exception as e:
+                print(f"Error subiendo archivo a Cloudinary: {e}")
+                raise HTTPException(
+                    status_code=500, 
+                    detail="Error al subir el archivo"
+                )
 
         # Crear mensaje
         nuevo = Message(
@@ -89,6 +107,7 @@ async def send_message(
         session.rollback()
         print("Error al enviar mensaje:", e)
         raise HTTPException(status_code=500, detail="Error interno al enviar mensaje")
+
 
 
 @message.get("/messages/{user_id}")
