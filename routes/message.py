@@ -10,7 +10,6 @@ from models.modelo import (
 )
 import datetime
 import os
-import shutil
 import cloudinary
 import cloudinary.uploader
 from cloudinary.utils import cloudinary_url
@@ -60,12 +59,24 @@ async def send_message(
         archivo_url = None
         if file and file.filename:
             try:
+                # Determinar el tipo de recurso según la extensión
+                file_extension = file.filename.split('.')[-1].lower()
+                
+                # Para PDFs y documentos usar 'raw', para imágenes 'image', para videos 'video'
+                if file_extension in ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'zip', 'rar']:
+                    resource_type = "raw"
+                elif file_extension in ['mp4', 'avi', 'mov', 'mkv']:
+                    resource_type = "video"
+                else:
+                    resource_type = "auto"
+                
                 # Subir archivo a Cloudinary
                 result = cloudinary.uploader.upload(
                     file.file,
-                    folder="mensajes_adjuntos",  # Carpeta en Cloudinary
-                    resource_type="auto",  # Detecta automáticamente el tipo
-                    public_id=f"{int(datetime.datetime.now().timestamp())}_{file.filename.split('.')[0]}"
+                    folder="mensajes_adjuntos",
+                    resource_type=resource_type,
+                    public_id=f"{int(datetime.datetime.now().timestamp())}_{file.filename.rsplit('.', 1)[0]}",
+                    format=file_extension if resource_type == "raw" else None
                 )
                 
                 # Obtener la URL segura del archivo
