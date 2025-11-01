@@ -38,58 +38,58 @@ async def send_message(
     file: UploadFile = File(None)
 ):
     try:
-        # Validar que haya contenido o archivo
         if not content.strip() and not file:
-            raise HTTPException(
-                status_code=422, 
-                detail="Debe proporcionar contenido del mensaje o un archivo"
-            )
+            raise HTTPException(status_code=422, detail="Debe proporcionar contenido del mensaje o un archivo")
         
-        # Verificar que los usuarios existan
         sender = session.query(User).get(sender_id)
         receiver = session.query(User).get(receiver_id)
         
         if not sender or not receiver:
-            raise HTTPException(
-                status_code=404, 
-                detail="Usuario no encontrado"
-            )
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
-        # Manejar archivo adjunto con Cloudinary
         archivo_url = None
         if file and file.filename:
             try:
-                # Determinar el tipo de recurso según la extensión
+                # Leer el archivo completo en memoria
+                file_content = await file.read()
+                
+                # Determinar el tipo de recurso
                 file_extension = file.filename.split('.')[-1].lower()
                 
-                # Para PDFs y documentos usar 'raw', para imágenes 'image', para videos 'video'
-                if file_extension in ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'zip', 'rar']:
+                if file_extension == 'pdf':
+                    resource_type = "image"  # CAMBIO IMPORTANTE: PDFs como "image" en Cloudinary
+                    params = {
+                        "folder": "mensajes_adjuntos",
+                        "resource_type": resource_type,
+                        "format": "pdf",
+                        "flags": "attachment"  # Fuerza descarga en lugar de mostrar inline
+                    }
+                elif file_extension in ['doc', 'docx', 'txt', 'xls', 'xlsx', 'zip', 'rar']:
                     resource_type = "raw"
-                elif file_extension in ['mp4', 'avi', 'mov', 'mkv']:
-                    resource_type = "video"
+                    params = {
+                        "folder": "mensajes_adjuntos",
+                        "resource_type": resource_type,
+                        "public_id": f"{int(datetime.datetime.now().timestamp())}_{file.filename.rsplit('.', 1)[0]}"
+                    }
                 else:
                     resource_type = "auto"
+                    params = {
+                        "folder": "mensajes_adjuntos",
+                        "resource_type": resource_type
+                    }
                 
-                # Subir archivo a Cloudinary
-                result = cloudinary.uploader.upload(
-                    file.file,
-                    folder="mensajes_adjuntos",
-                    resource_type=resource_type,
-                    public_id=f"{int(datetime.datetime.now().timestamp())}_{file.filename.rsplit('.', 1)[0]}",
-                    format=file_extension if resource_type == "raw" else None
-                )
-                
-                # Obtener la URL segura del archivo
+                # Subir a Cloudinary
+                result = cloudinary.uploader.upload(file_content, **params)
                 archivo_url = result.get("secure_url")
                 
+                print(f"✅ Archivo subido: {file.filename}")
+                print(f"📁 Tipo: {resource_type}")
+                print(f"🔗 URL: {archivo_url}")
+                
             except Exception as e:
-                print(f"Error subiendo archivo a Cloudinary: {e}")
-                raise HTTPException(
-                    status_code=500, 
-                    detail="Error al subir el archivo"
-                )
+                print(f"❌ Error subiendo a Cloudinary: {e}")
+                raise HTTPException(status_code=500, detail=f"Error al subir archivo: {str(e)}")
 
-        # Crear mensaje
         nuevo = Message(
             sender_id=sender_id,
             receiver_id=receiver_id,
