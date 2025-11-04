@@ -183,6 +183,7 @@ def get_available_users(user_id: int, search: str = ""):
 
         tipo = user.userdetail.type.lower()
 
+        # Construir query base
         if tipo == "admin":
             usuarios = session.query(User).filter(User.id != user_id)
         elif tipo == "profesor":
@@ -204,14 +205,18 @@ def get_available_users(user_id: int, search: str = ""):
                 status_code=400, content={"detail": "Tipo de usuario desconocido"}
             )
 
-        # Filtrado por nombre si hay término de búsqueda
-        if search and len(search.strip()) >= 2:  # Solo buscar con al menos 2 caracteres
-            usuarios = usuarios.join(UserDetails).filter(
+        # Aplicar filtro de búsqueda si existe
+        if search and len(search.strip()) >= 2:
+            # IMPORTANTE: Si ya hicimos join antes, no lo hacemos de nuevo
+            if tipo == "admin":
+                usuarios = usuarios.join(UserDetails)
+            
+            # Filtrar por nombre completo
+            usuarios = usuarios.filter(
                 (UserDetails.firstName + " " + UserDetails.lastName).ilike(
                     f"%{search.strip()}%"
                 )
             )
-            # Aumentar límite cuando hay búsqueda activa
             usuarios = usuarios.limit(50).all()
         else:
             # Sin búsqueda, mostrar solo los primeros 20
@@ -233,6 +238,7 @@ def get_available_users(user_id: int, search: str = ""):
     except Exception as e:
         print("Error al obtener usuarios disponibles:", e)
         return JSONResponse(status_code=500, content={"detail": "Error interno"})
+
 
 
 @message.get("/notifications/{user_id}/{user_type}")
