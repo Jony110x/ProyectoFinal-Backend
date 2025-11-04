@@ -173,7 +173,7 @@ def get_messages(user_id: int):
 
 
 @message.get("/messages/available/{user_id}")
-def get_available_users(user_id: int, search: str = ""):
+def get_available_users(user_id: int, search: str = "", page: int = 1, limit: int = 50):
     try:
         user = session.query(User).get(user_id)
         if not user:
@@ -190,27 +190,26 @@ def get_available_users(user_id: int, search: str = ""):
             )
 
         tipo = user.userdetail.type.lower()
-        print(f"🔍 Usuario tipo: {tipo}, ID: {user_id}, buscando: '{search}'")
+        print(f"🔍 Usuario tipo: {tipo}, ID: {user_id}, buscando: '{search}', página: {page}")
 
         # Construir query base
-        # ⚠️ IMPORTANTE: Siempre hacer JOIN para obtener los nombres
         if tipo == "admin":
             usuarios = (
                 session.query(User)
-                .join(UserDetails, User.id_userdetail == UserDetails.id)  # ✅ JOIN obligatorio
+                .join(UserDetails, User.id_userdetail == UserDetails.id) 
                 .filter(User.id != user_id)
             )
         elif tipo == "profesor":
             usuarios = (
                 session.query(User)
-                .join(UserDetails, User.id_userdetail == UserDetails.id)  # ✅ Join corregido
+                .join(UserDetails, User.id_userdetail == UserDetails.id)  
                 .filter(User.id != user_id)
                 .filter(UserDetails.type.in_(["admin", "estudiante"]))
             )
         elif tipo == "estudiante":
             usuarios = (
                 session.query(User)
-                .join(UserDetails, User.id_userdetail == UserDetails.id)  # ✅ Join corregido
+                .join(UserDetails, User.id_userdetail == UserDetails.id) 
                 .filter(User.id != user_id)
                 .filter(UserDetails.type.in_(["admin", "profesor"]))
             )
@@ -226,12 +225,15 @@ def get_available_users(user_id: int, search: str = ""):
             usuarios = usuarios.filter(
                 (UserDetails.firstName + " " + UserDetails.lastName).ilike(search_term)
             )
-            usuarios = usuarios.limit(50).all()
-        else:
-            # Sin búsqueda, mostrar solo los primeros 20
-            usuarios = usuarios.limit(20).all()
 
-        print(f"✅ Query ejecutada, se encontraron {len(usuarios)} usuarios")
+        # ✅ Ordenar por ID descendente (más recientes primero)
+        usuarios = usuarios.order_by(User.id.desc())
+        
+        # ✅ Aplicar paginación
+        offset = (page - 1) * limit
+        usuarios = usuarios.offset(offset).limit(limit).all()
+
+        print(f"✅ Query ejecutada, se encontraron {len(usuarios)} usuarios (página {page})")
 
         resultado = []
         for u in usuarios:
@@ -246,7 +248,6 @@ def get_available_users(user_id: int, search: str = ""):
                 "nombre": nombre, 
                 "type": u.userdetail.type
             })
-            print(f"  ✓ {u.id}: {nombre} ({u.userdetail.type})")
 
         print(f"📋 Resultado final: {len(resultado)} usuarios válidos")
         return resultado
