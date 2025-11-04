@@ -190,26 +190,27 @@ def get_available_users(user_id: int, search: str = ""):
             )
 
         tipo = user.userdetail.type.lower()
-        print(f"🔍 Usuario tipo: {tipo}, buscando: '{search}'")
+        print(f"🔍 Usuario tipo: {tipo}, ID: {user_id}, buscando: '{search}'")
 
-        # Construir query base con LEFT JOIN para incluir usuarios sin detalles
+        # Construir query base
+        # ⚠️ IMPORTANTE: Siempre hacer JOIN para obtener los nombres
         if tipo == "admin":
             usuarios = (
                 session.query(User)
-                .outerjoin(UserDetails)  # ✅ Cambio a outerjoin
+                .join(UserDetails, User.id_userdetail == UserDetails.id)  # ✅ JOIN obligatorio
                 .filter(User.id != user_id)
             )
         elif tipo == "profesor":
             usuarios = (
                 session.query(User)
-                .join(UserDetails)
+                .join(UserDetails, User.id_userdetail == UserDetails.id)  # ✅ Join corregido
                 .filter(User.id != user_id)
                 .filter(UserDetails.type.in_(["admin", "estudiante"]))
             )
         elif tipo == "estudiante":
             usuarios = (
                 session.query(User)
-                .join(UserDetails)
+                .join(UserDetails, User.id_userdetail == UserDetails.id)  # ✅ Join corregido
                 .filter(User.id != user_id)
                 .filter(UserDetails.type.in_(["admin", "profesor"]))
             )
@@ -220,28 +221,23 @@ def get_available_users(user_id: int, search: str = ""):
 
         # Aplicar filtro de búsqueda si existe
         if search and len(search.strip()) >= 2:
-            # Si ya hicimos join antes, no lo hacemos de nuevo
-            if tipo == "admin":
-                usuarios = usuarios.filter(UserDetails.id.isnot(None))  # Solo usuarios con detalles
-            
             # Filtrar por nombre completo
+            search_term = f"%{search.strip()}%"
             usuarios = usuarios.filter(
-                (UserDetails.firstName + " " + UserDetails.lastName).ilike(
-                    f"%{search.strip()}%"
-                )
+                (UserDetails.firstName + " " + UserDetails.lastName).ilike(search_term)
             )
             usuarios = usuarios.limit(50).all()
         else:
             # Sin búsqueda, mostrar solo los primeros 20
             usuarios = usuarios.limit(20).all()
 
-        print(f"✅ Se encontraron {len(usuarios)} usuarios")
+        print(f"✅ Query ejecutada, se encontraron {len(usuarios)} usuarios")
 
         resultado = []
         for u in usuarios:
             # ⚠️ Verificar si tiene userdetail antes de acceder
             if not u.userdetail:
-                print(f"⚠️ Usuario {u.id} no tiene userdetail - OMITIDO")
+                print(f"⚠️ Usuario {u.id} ({u.username}) no tiene userdetail - OMITIDO")
                 continue
                 
             nombre = f"{u.userdetail.firstName} {u.userdetail.lastName}"
@@ -250,7 +246,7 @@ def get_available_users(user_id: int, search: str = ""):
                 "nombre": nombre, 
                 "type": u.userdetail.type
             })
-            print(f"  - {u.id}: {nombre} ({u.userdetail.type})")
+            print(f"  ✓ {u.id}: {nombre} ({u.userdetail.type})")
 
         print(f"📋 Resultado final: {len(resultado)} usuarios válidos")
         return resultado
@@ -260,7 +256,6 @@ def get_available_users(user_id: int, search: str = ""):
         import traceback
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"detail": f"Error interno: {str(e)}"})
-
 
 
 
