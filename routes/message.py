@@ -181,11 +181,24 @@ def get_available_users(user_id: int, search: str = ""):
                 status_code=404, content={"detail": "Usuario no encontrado"}
             )
 
-        tipo = user.userdetail.type.lower()
+        # ✅ Verificar que el usuario tenga userdetail
+        if not user.userdetail:
+            print(f"⚠️ Usuario {user_id} no tiene userdetail asociado")
+            return JSONResponse(
+                status_code=400, 
+                content={"detail": "Usuario sin información de perfil"}
+            )
 
-        # Construir query base
+        tipo = user.userdetail.type.lower()
+        print(f"🔍 Usuario tipo: {tipo}, buscando: '{search}'")
+
+        # Construir query base con LEFT JOIN para incluir usuarios sin detalles
         if tipo == "admin":
-            usuarios = session.query(User).filter(User.id != user_id)
+            usuarios = (
+                session.query(User)
+                .outerjoin(UserDetails)  # ✅ Cambio a outerjoin
+                .filter(User.id != user_id)
+            )
         elif tipo == "profesor":
             usuarios = (
                 session.query(User)
@@ -207,9 +220,9 @@ def get_available_users(user_id: int, search: str = ""):
 
         # Aplicar filtro de búsqueda si existe
         if search and len(search.strip()) >= 2:
-            # IMPORTANTE: Si ya hicimos join antes, no lo hacemos de nuevo
+            # Si ya hicimos join antes, no lo hacemos de nuevo
             if tipo == "admin":
-                usuarios = usuarios.join(UserDetails)
+                usuarios = usuarios.filter(UserDetails.id.isnot(None))  # Solo usuarios con detalles
             
             # Filtrar por nombre completo
             usuarios = usuarios.filter(
@@ -222,22 +235,32 @@ def get_available_users(user_id: int, search: str = ""):
             # Sin búsqueda, mostrar solo los primeros 20
             usuarios = usuarios.limit(20).all()
 
+        print(f"✅ Se encontraron {len(usuarios)} usuarios")
+
         resultado = []
         for u in usuarios:
-            nombre = "Usuario desconocido"
-            if u.userdetail:
-                nombre = f"{u.userdetail.firstName} {u.userdetail.lastName}"
+            # ⚠️ Verificar si tiene userdetail antes de acceder
+            if not u.userdetail:
+                print(f"⚠️ Usuario {u.id} no tiene userdetail - OMITIDO")
+                continue
+                
+            nombre = f"{u.userdetail.firstName} {u.userdetail.lastName}"
             resultado.append({
                 "id": u.id, 
                 "nombre": nombre, 
-                "type": u.userdetail.type if u.userdetail else "unknown"
+                "type": u.userdetail.type
             })
+            print(f"  - {u.id}: {nombre} ({u.userdetail.type})")
 
+        print(f"📋 Resultado final: {len(resultado)} usuarios válidos")
         return resultado
 
     except Exception as e:
-        print("Error al obtener usuarios disponibles:", e)
-        return JSONResponse(status_code=500, content={"detail": "Error interno"})
+        print(f"❌ Error al obtener usuarios disponibles: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": f"Error interno: {str(e)}"})
+
 
 
 
