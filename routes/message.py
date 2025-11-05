@@ -260,6 +260,53 @@ def get_available_users(user_id: int, search: str = "", page: int = 1, limit: in
 
 
 
+@message.get("/messages/conversations/{user_id}")
+def get_conversations(user_id: int):
+    try:
+        # Obtener todos los mensajes donde participa el usuario
+        mensajes = (
+            session.query(Message)
+            .filter((Message.sender_id == user_id) | (Message.receiver_id == user_id))
+            .order_by(Message.timestamp.desc())
+            .all()
+        )
+
+        conversaciones = {}
+        for msg in mensajes:
+            otro_id = msg.receiver_id if msg.sender_id == user_id else msg.sender_id
+
+            # Solo agregar la conversación si no está ya registrada (la más reciente queda primero)
+            if otro_id not in conversaciones:
+                otro_usuario = session.query(User).filter_by(id=otro_id).first()
+
+                if otro_usuario and otro_usuario.userdetail:
+                    nombre = f"{otro_usuario.userdetail.firstName} {otro_usuario.userdetail.lastName}"
+                    tipo = otro_usuario.userdetail.type
+                else:
+                    nombre = "Usuario desconocido"
+                    tipo = "N/A"
+
+                conversaciones[otro_id] = {
+                    "id": otro_id,
+                    "nombre": nombre,
+                    "type": tipo,
+                    "ultimoMensaje": msg.content if msg.content else "📎 Archivo adjunto",
+                    "timestamp": msg.timestamp,
+                }
+
+        # Convertir a lista y ordenar por fecha descendente (más reciente primero)
+        resultado = sorted(conversaciones.values(), key=lambda x: x["timestamp"], reverse=True)
+        return resultado
+
+    except Exception as e:
+        print("❌ Error al obtener conversaciones:", e)
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Error interno al obtener conversaciones")
+
+
+
+
 @message.get("/notifications/{user_id}/{user_type}")
 def get_notifications(user_id: int, user_type: str):
     try:
