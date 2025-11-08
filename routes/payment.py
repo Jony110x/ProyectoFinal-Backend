@@ -431,7 +431,7 @@ def get_usuarios_con_pagos_pendientes(
                 "dni": est.userdetail.dni,
                 "carer": carrera_nombre,
                 "carer_id": est.userdetail.carer_id,
-                "total_pagos_realizados": 0
+                "total_pagos_realizados": total_pagos
             })
         
         next_cursor = usuarios_pendientes[-1]["id"] if len(usuarios_pendientes) == limit else None
