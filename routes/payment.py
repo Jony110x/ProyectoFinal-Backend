@@ -374,11 +374,13 @@ def get_usuarios_con_pagos_pendientes(
 ):
     try:
         from datetime import datetime
+        from sqlalchemy import func, case
+        
         mes_actual = datetime.now().month
         anio_actual = datetime.now().year
         
-        # Obtener pagos del mes actual
-        pagos_mes = (
+        # ✅ OPTIMIZACIÓN 1: Obtener IDs de usuarios que pagaron este mes en UNA query
+        usuarios_con_pago = set(
             session.query(Payment.user_id)
             .filter(
                 extract('month', Payment.affected_month) == mes_actual,
@@ -387,92 +389,107 @@ def get_usuarios_con_pagos_pendientes(
             .distinct()
             .all()
         )
+        usuarios_con_pago = {user_id[0] for user_id in usuarios_con_pago}
         
-        # Set de usuarios que ya pagaron
-        usuarios_con_pago = {pago.user_id for pago in pagos_mes}
-        
-        # Query base de estudiantes deudores
-        estudiantes_query = (
-            session.query(User)
-            .options(
-                joinedload(User.userdetail).joinedload(UserDetails.carer)
+        # ✅ OPTIMIZACIÓN 2: Subconsulta para contar pagos totales por usuario
+        subquery_count = (
+            session.query(
+                Payment.user_id,
+                func.count(Payment.id).label('total_pagos')
             )
-            .join(UserDetails)
-            .filter(UserDetails.type == "estudiante")
-            .order_by(User.id.asc())  # Importante: ordenar por ID para cursor
+            .group_by(Payment.user_id)
+            .subquery()
         )
         
-        # Si hay cursor, empezar desde ahí
+        # ✅ OPTIMIZACIÓN 3: Subconsulta para obtener el último pago y su carrera
+        subquery_last_payment = (
+            session.query(
+                Payment.user_id,
+                Payment.carer_id,
+                func.max(Payment.affected_month).label('last_payment_date')
+            )
+            .group_by(Payment.user_id, Payment.carer_id)
+            .subquery()
+        )
+        
+        # ✅ OPTIMIZACIÓN 4: Query principal con JOINS para traer todo de una vez
+        query = (
+            session.query(
+                User,
+                UserDetails,
+                Carer,
+                func.coalesce(subquery_count.c.total_pagos, 0).label('total_pagos')
+            )
+            .join(UserDetails, User.id == UserDetails.user_id)
+            .outerjoin(Carer, UserDetails.carer_id == Carer.id)
+            .outerjoin(subquery_count, User.id == subquery_count.c.user_id)
+            .filter(UserDetails.type == "estudiante")
+            .filter(~User.id.in_(usuarios_con_pago))  # Filtrar los que NO pagaron
+            .order_by(User.id.asc())
+        )
+        
+        # Aplicar cursor si existe
         if last_seen_id is not None:
-            estudiantes_query = estudiantes_query.filter(User.id > last_seen_id)
+            query = query.filter(User.id > last_seen_id)
         
         # Traer limit + 1 para saber si hay más
-        estudiantes = estudiantes_query.limit(limit + 1).all()
+        resultados = query.limit(limit + 1).all()
         
-        # Filtrar los que NO pagaron este mes
-        estudiantes_deudores = [
-            est for est in estudiantes
-            if est.id not in usuarios_con_pago and est.userdetail
-        ]
-        
-        # Verificar si hay más resultados
-        has_more = len(estudiantes_deudores) > limit
+        # Verificar si hay más
+        has_more = len(resultados) > limit
         if has_more:
-            estudiantes_deudores = estudiantes_deudores[:limit]
+            resultados = resultados[:limit]
         
         # Calcular next_cursor
-        next_cursor = estudiantes_deudores[-1].id if estudiantes_deudores and has_more else None
+        next_cursor = resultados[-1][0].id if resultados and has_more else None
         
-        # Construir lista de deudores
-        usuarios_pendientes = []
-        for estudiante in estudiantes_deudores:
-            # Obtener última carrera
-            ultima_carrera = None
-            
-            ultimo_pago = (
-                session.query(Payment)
-                .filter(Payment.user_id == estudiante.id)
-                .order_by(Payment.affected_month.desc())
-                .first()
-            )
-            
-            if ultimo_pago and ultimo_pago.carer:
-                ultima_carrera = ultimo_pago.carer.name
-            elif estudiante.userdetail.carer:
-                ultima_carrera = estudiante.userdetail.carer.name
-            else:
-                ultima_carrera = "Sin carrera asignada"
-            
-            # Contar pagos realizados
-            total_pagos = (
-                session.query(Payment)
-                .filter(Payment.user_id == estudiante.id)
-                .count()
-            )
-            
-            usuarios_pendientes.append({
-                "id": estudiante.id,
-                "username": estudiante.username,
-                "firstName": estudiante.userdetail.firstName,
-                "lastName": estudiante.userdetail.lastName,
-                "fullname": f"{estudiante.userdetail.firstName} {estudiante.userdetail.lastName}",
-                "email": estudiante.userdetail.email,
-                "dni": estudiante.userdetail.dni,
-                "carer": ultima_carrera,
-                "carer_id": estudiante.userdetail.carer_id,
-                "total_pagos_realizados": total_pagos
-            })
+        # ✅ OPTIMIZACIÓN 5: Obtener carreras del último pago en batch
+        user_ids = [r[0].id for r in resultados]
+        ultimas_carreras_dict = {}
         
-        # Contar total de deudores (solo en primera carga)
-        total_count = None
-        if last_seen_id is None:
-            todos_estudiantes = (
-                session.query(User)
-                .join(UserDetails)
-                .filter(UserDetails.type == "estudiante")
+        if user_ids:
+            ultimas_carreras = (
+                session.query(
+                    Payment.user_id,
+                    Carer.name
+                )
+                .join(Carer, Payment.carer_id == Carer.id)
+                .filter(Payment.user_id.in_(user_ids))
+                .distinct(Payment.user_id)
+                .order_by(Payment.user_id, Payment.affected_month.desc())
                 .all()
             )
-            total_count = len([est for est in todos_estudiantes if est.id not in usuarios_con_pago])
+            ultimas_carreras_dict = {uc[0]: uc[1] for uc in ultimas_carreras}
+        
+        # Construir respuesta
+        usuarios_pendientes = []
+        for user, userdetail, carer, total_pagos in resultados:
+            # Determinar carrera (prioridad: último pago > userdetail > default)
+            carrera_nombre = ultimas_carreras_dict.get(user.id) or (carer.name if carer else "Sin carrera asignada")
+            
+            usuarios_pendientes.append({
+                "id": user.id,
+                "username": user.username,
+                "firstName": userdetail.firstName,
+                "lastName": userdetail.lastName,
+                "fullname": f"{userdetail.firstName} {userdetail.lastName}",
+                "email": userdetail.email,
+                "dni": userdetail.dni,
+                "carer": carrera_nombre,
+                "carer_id": userdetail.carer_id,
+                "total_pagos_realizados": int(total_pagos) if total_pagos else 0
+            })
+        
+        # Contar total solo en primera carga
+        total_count = None
+        if last_seen_id is None:
+            total_count = (
+                session.query(func.count(User.id))
+                .join(UserDetails)
+                .filter(UserDetails.type == "estudiante")
+                .filter(~User.id.in_(usuarios_con_pago))
+                .scalar()
+            )
         
         return {
             "count": total_count,
@@ -481,6 +498,7 @@ def get_usuarios_con_pagos_pendientes(
             "deudores": usuarios_pendientes,
             "next_cursor": next_cursor
         }
+        
     except Exception as e:
         print("Error:", e)
         import traceback
@@ -491,23 +509,16 @@ def get_usuarios_con_pagos_pendientes(
 
 
 @payment.get("/payment/pending/search")
-def search_deudores(
-    q: str,
-    limit: int = 50,
-    req: Request = None
-):
+def search_deudores(q: str, limit: int = 100):
     try:
-        # Verificar token (opcional, dependiendo de tu seguridad)
-        # has_access = Security.verify_token(req.headers)
-        # if "iat" not in has_access:
-        #     return JSONResponse(status_code=401, content=has_access)
-
         from datetime import datetime
+        from sqlalchemy import func
+        
         mes_actual = datetime.now().month
         anio_actual = datetime.now().year
         
-        # Obtener pagos del mes actual
-        pagos_mes = (
+        # Usuarios que pagaron este mes
+        usuarios_con_pago = set(
             session.query(Payment.user_id)
             .filter(
                 extract('month', Payment.affected_month) == mes_actual,
@@ -516,19 +527,32 @@ def search_deudores(
             .distinct()
             .all()
         )
+        usuarios_con_pago = {user_id[0] for user_id in usuarios_con_pago}
         
-        # Set de usuarios que ya pagaron
-        usuarios_con_pago = {pago.user_id for pago in pagos_mes}
-        
-        # Query de estudiantes con filtro de búsqueda
-        q_like = f"%{q}%"
-        estudiantes_query = (
-            session.query(User)
-            .options(
-                joinedload(User.userdetail).joinedload(UserDetails.carer)
+        # Subconsulta para contar pagos
+        subquery_count = (
+            session.query(
+                Payment.user_id,
+                func.count(Payment.id).label('total_pagos')
             )
-            .join(UserDetails)
+            .group_by(Payment.user_id)
+            .subquery()
+        )
+        
+        # Query de búsqueda optimizado
+        q_like = f"%{q}%"
+        query = (
+            session.query(
+                User,
+                UserDetails,
+                Carer,
+                func.coalesce(subquery_count.c.total_pagos, 0).label('total_pagos')
+            )
+            .join(UserDetails, User.id == UserDetails.user_id)
+            .outerjoin(Carer, UserDetails.carer_id == Carer.id)
+            .outerjoin(subquery_count, User.id == subquery_count.c.user_id)
             .filter(UserDetails.type == "estudiante")
+            .filter(~User.id.in_(usuarios_con_pago))
             .filter(
                 (User.username.ilike(q_like)) |
                 (UserDetails.firstName.ilike(q_like)) |
@@ -538,53 +562,44 @@ def search_deudores(
             )
             .order_by(User.id.asc())
             .limit(limit)
-            .all()
         )
         
-        # Filtrar solo los deudores
-        estudiantes_deudores = [
-            est for est in estudiantes_query
-            if est.id not in usuarios_con_pago and est.userdetail
-        ]
+        resultados = query.all()
         
-        # Construir lista de deudores
+        # Obtener carreras del último pago en batch
+        user_ids = [r[0].id for r in resultados]
+        ultimas_carreras_dict = {}
+        
+        if user_ids:
+            ultimas_carreras = (
+                session.query(
+                    Payment.user_id,
+                    Carer.name
+                )
+                .join(Carer, Payment.carer_id == Carer.id)
+                .filter(Payment.user_id.in_(user_ids))
+                .distinct(Payment.user_id)
+                .order_by(Payment.user_id, Payment.affected_month.desc())
+                .all()
+            )
+            ultimas_carreras_dict = {uc[0]: uc[1] for uc in ultimas_carreras}
+        
+        # Construir respuesta
         usuarios_pendientes = []
-        for estudiante in estudiantes_deudores:
-            # Obtener última carrera
-            ultima_carrera = None
-            
-            ultimo_pago = (
-                session.query(Payment)
-                .filter(Payment.user_id == estudiante.id)
-                .order_by(Payment.affected_month.desc())
-                .first()
-            )
-            
-            if ultimo_pago and ultimo_pago.carer:
-                ultima_carrera = ultimo_pago.carer.name
-            elif estudiante.userdetail.carer:
-                ultima_carrera = estudiante.userdetail.carer.name
-            else:
-                ultima_carrera = "Sin carrera asignada"
-            
-            # Contar pagos realizados
-            total_pagos = (
-                session.query(Payment)
-                .filter(Payment.user_id == estudiante.id)
-                .count()
-            )
+        for user, userdetail, carer, total_pagos in resultados:
+            carrera_nombre = ultimas_carreras_dict.get(user.id) or (carer.name if carer else "Sin carrera asignada")
             
             usuarios_pendientes.append({
-                "id": estudiante.id,
-                "username": estudiante.username,
-                "firstName": estudiante.userdetail.firstName,
-                "lastName": estudiante.userdetail.lastName,
-                "fullname": f"{estudiante.userdetail.firstName} {estudiante.userdetail.lastName}",
-                "email": estudiante.userdetail.email,
-                "dni": estudiante.userdetail.dni,
-                "carer": ultima_carrera,
-                "carer_id": estudiante.userdetail.carer_id,
-                "total_pagos_realizados": total_pagos
+                "id": user.id,
+                "username": user.username,
+                "firstName": userdetail.firstName,
+                "lastName": userdetail.lastName,
+                "fullname": f"{userdetail.firstName} {userdetail.lastName}",
+                "email": userdetail.email,
+                "dni": userdetail.dni,
+                "carer": carrera_nombre,
+                "carer_id": userdetail.carer_id,
+                "total_pagos_realizados": int(total_pagos) if total_pagos else 0
             })
         
         return {
