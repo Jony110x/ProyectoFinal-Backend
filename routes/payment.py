@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import String, extract, or_
+from sqlalchemy import String, and_, extract, or_
 from auth.security import Security
 from models.modelo import Payment, InputPayment, UserDetails, session, User, Carer, UpdatePayment, InputPaginatedRequest
 from sqlalchemy.orm import joinedload
@@ -374,33 +374,12 @@ def get_usuarios_con_pagos_pendientes(
 ):
     try:
         from datetime import datetime
-        from sqlalchemy import func, and_, or_
+        from sqlalchemy import func
         
         mes_actual = datetime.now().month
         anio_actual = datetime.now().year
         
-        # ✅ Subconsulta: pagos del mes actual
-        pagos_mes_subquery = (
-            session.query(Payment.user_id)
-            .filter(
-                extract('month', Payment.affected_month) == mes_actual,
-                extract('year', Payment.affected_month) == anio_actual
-            )
-            .distinct()
-            .subquery()
-        )
-        
-        # ✅ Subconsulta: total de pagos por usuario
-        total_pagos_subquery = (
-            session.query(
-                Payment.user_id,
-                func.count(Payment.id).label('total')
-            )
-            .group_by(Payment.user_id)
-            .subquery()
-        )
-        
-        # ✅ Query principal con LEFT JOIN para encontrar deudores
+        # ✅ OPTIMIZACIÓN CRÍTICA: Una sola query con LEFT JOIN
         query = (
             session.query(
                 User.id,
@@ -411,25 +390,46 @@ def get_usuarios_con_pagos_pendientes(
                 UserDetails.dni,
                 UserDetails.carer_id,
                 Carer.name.label('carer_name'),
-                func.coalesce(total_pagos_subquery.c.total, 0).label('total_pagos')
+                func.count(Payment.id).label('total_pagos')
             )
             .join(UserDetails, User.id == UserDetails.user_id)
             .outerjoin(Carer, UserDetails.carer_id == Carer.id)
-            .outerjoin(total_pagos_subquery, User.id == total_pagos_subquery.c.user_id)
-            .outerjoin(pagos_mes_subquery, User.id == pagos_mes_subquery.c.user_id)
+            .outerjoin(Payment, User.id == Payment.user_id)
+            .outerjoin(
+                Payment.alias('pago_mes'),
+                and_(
+                    User.id == Payment.user_id,
+                    extract('month', Payment.affected_month) == mes_actual,
+                    extract('year', Payment.affected_month) == anio_actual
+                )
+            )
             .filter(UserDetails.type == "estudiante")
-            .filter(pagos_mes_subquery.c.user_id == None)  # ✅ Los que NO pagaron este mes
+            .group_by(
+                User.id,
+                User.username,
+                UserDetails.firstName,
+                UserDetails.lastName,
+                UserDetails.email,
+                UserDetails.dni,
+                UserDetails.carer_id,
+                Carer.name
+            )
+            .having(func.count(Payment.id.filter(
+                and_(
+                    extract('month', Payment.affected_month) == mes_actual,
+                    extract('year', Payment.affected_month) == anio_actual
+                )
+            )) == 0)
             .order_by(User.id.asc())
         )
         
-        # Aplicar cursor
+        # Cursor
         if last_seen_id is not None:
             query = query.filter(User.id > last_seen_id)
         
-        # Limitar resultados
+        # Ejecutar con límite
         resultados = query.limit(limit + 1).all()
         
-        # Verificar si hay más
         has_more = len(resultados) > limit
         if has_more:
             resultados = resultados[:limit]
@@ -449,20 +449,27 @@ def get_usuarios_con_pagos_pendientes(
                 "dni": r.dni,
                 "carer": r.carer_name or "Sin carrera asignada",
                 "carer_id": r.carer_id,
-                "total_pagos_realizados": int(r.total_pagos)
+                "total_pagos_realizados": int(r.total_pagos) if r.total_pagos else 0
             })
         
-        # Contar total solo en primera carga (de forma eficiente)
+        # Count solo en primera carga - SIN TRAER TODOS
         total_count = None
         if last_seen_id is None:
-            count_query = (
+            count_subquery = (
                 session.query(func.count(User.id))
-                .join(UserDetails, User.id == UserDetails.user_id)
-                .outerjoin(pagos_mes_subquery, User.id == pagos_mes_subquery.c.user_id)
+                .join(UserDetails)
+                .outerjoin(
+                    Payment,
+                    and_(
+                        User.id == Payment.user_id,
+                        extract('month', Payment.affected_month) == mes_actual,
+                        extract('year', Payment.affected_month) == anio_actual
+                    )
+                )
                 .filter(UserDetails.type == "estudiante")
-                .filter(pagos_mes_subquery.c.user_id == None)
+                .filter(Payment.id == None)
             )
-            total_count = count_query.scalar()
+            total_count = count_subquery.scalar()
         
         return {
             "count": total_count,
@@ -476,7 +483,7 @@ def get_usuarios_con_pagos_pendientes(
         print("Error:", e)
         import traceback
         traceback.print_exc()
-        return JSONResponse(status_code=500, content={"detail": "Error interno"})
+        return JSONResponse(status_code=500, content={"detail": str(e)})
     finally:
         session.close()
 
