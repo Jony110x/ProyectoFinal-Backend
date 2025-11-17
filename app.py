@@ -1,4 +1,4 @@
-import sys  
+import sys 
 sys.tracebacklimit = 1  
 
 from fastapi import FastAPI
@@ -11,6 +11,7 @@ from routes.updateUser import updateUser
 from routes.message import message
 from routes.asignarMateria import asignar
 from fastapi.staticfiles import StaticFiles
+from routes.mercadoPago import router as mp_router
 
 api_escu = FastAPI()
 
@@ -28,6 +29,10 @@ api_escu.include_router(message)
 
 api_escu.include_router(asignar)
 
+api_escu.include_router(mp_router, prefix="/mercado-pago")
+
+
+
 api_escu.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,3 +42,6 @@ api_escu.add_middleware(
 )
 
 api_escu.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+#Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+#venv\Scripts\activate
+#uvicorn app:api_escu --reload --port 8000

@@ -206,7 +206,7 @@ class InputPaginatedRequestFilter(BaseModel):
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 
-ASYNC_DATABASE_URL = "postgresql+asyncpg://postgres:1234@localhost:5432/proyectoFinal-copia"
+ASYNC_DATABASE_URL = "postgresql+asyncpg://postgres:1234@localhost:5432/proyectoFinal"
 
 async_engine = create_async_engine(ASYNC_DATABASE_URL, echo=False)
 

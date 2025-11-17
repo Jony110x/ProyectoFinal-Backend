@@ -37,7 +37,6 @@ def get_all_payments():
         print("Error:", e)
         return JSONResponse(status_code=500, content={"detail": "Error al obtener pagos"})
 
-
 @payment.post("/payment/new")
 def create_payment(data: InputPayment):
     try:
@@ -84,7 +83,6 @@ def create_payment(data: InputPayment):
     finally:
         session.close()
 
-    
 @payment.get("/payment/user/{username}")
 def payment_user(username: str):
     try:
@@ -118,7 +116,6 @@ def payment_user(username: str):
     finally:
         session.close()
 
-
 @payment.put("/payment/{payment_id}")
 def actualizar_pago(payment_id: int, data: UpdatePayment):
     pago = session.query(Payment).get(payment_id)
@@ -132,7 +129,6 @@ def actualizar_pago(payment_id: int, data: UpdatePayment):
     session.commit()
     return {"message": "Pago actualizado correctamente"}
 
-
 @payment.delete("/payment/{payment_id}")
 def eliminar_pago(payment_id: int):
     pago = session.query(Payment).get(payment_id)
@@ -142,96 +138,6 @@ def eliminar_pago(payment_id: int):
     session.delete(pago)
     session.commit()
     return {"message": "Pago eliminado correctamente"}  
-
-
-@payment.get("/payment/pending")
-def get_usuarios_con_pagos_pendientes():
-    try:
-        from datetime import datetime
-        mes_actual = datetime.now().month
-        anio_actual = datetime.now().year
-        
-        # Obtener todos los estudiantes con sus detalles y carrera
-        estudiantes = (
-            session.query(User)
-            .options(
-                joinedload(User.userdetail).joinedload(UserDetails.carer)
-            )
-            .join(UserDetails)
-            .filter(UserDetails.type == "estudiante")
-            .all()
-        )
-        
-        # Obtener pagos del mes actual
-        pagos_mes = (
-            session.query(Payment)
-            .filter(
-                extract('month', Payment.affected_month) == mes_actual,
-                extract('year', Payment.affected_month) == anio_actual
-            )
-            .all()
-        )
-        
-        # Set de usuarios que ya pagaron
-        usuarios_con_pago = {pago.user_id for pago in pagos_mes}
-        
-        # Construir lista de deudores
-        usuarios_pendientes = []
-        for estudiante in estudiantes:
-            if estudiante.id not in usuarios_con_pago and estudiante.userdetail:
-                # Obtener última carrera del último pago o la asignada en userdetail
-                ultima_carrera = None
-                
-                # Primero intentar obtener del último pago
-                ultimo_pago = (
-                    session.query(Payment)
-                    .filter(Payment.user_id == estudiante.id)
-                    .order_by(Payment.affected_month.desc())
-                    .first()
-                )
-                
-                if ultimo_pago and ultimo_pago.carer:
-                    ultima_carrera = ultimo_pago.carer.name
-                elif estudiante.userdetail.carer:
-                    ultima_carrera = estudiante.userdetail.carer.name
-                else:
-                    ultima_carrera = "Sin carrera asignada"
-                
-                # Contar cuántos meses debe
-                total_pagos = (
-                    session.query(Payment)
-                    .filter(Payment.user_id == estudiante.id)
-                    .count()
-                )
-                
-                usuarios_pendientes.append({
-                    "id": estudiante.id,
-                    "username": estudiante.username,
-                    "firstName": estudiante.userdetail.firstName,
-                    "lastName": estudiante.userdetail.lastName,
-                    "fullname": f"{estudiante.userdetail.firstName} {estudiante.userdetail.lastName}",
-                    "email": estudiante.userdetail.email,
-                    "dni": estudiante.userdetail.dni,
-                    "carer": ultima_carrera,
-                    "carer_id": estudiante.userdetail.carer_id,
-                    "total_pagos_realizados": total_pagos
-                })
-        
-        return {
-            "count": len(usuarios_pendientes),
-            "month": mes_actual,
-            "year": anio_actual,
-            "deudores": usuarios_pendientes
-        }
-    except Exception as e:
-        print("Error:", e)
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(status_code=500, content={"detail": "Error interno"})
-    finally:
-        session.close()
-
-
 
 @payment.post("/payment/paginated")
 async def get_payments_paginated(
@@ -306,7 +212,6 @@ async def get_payments_paginated(
             content={"message": "Error al obtener pagos paginados"}
         )
 
-
 @payment.get("/payment/search")
 def search_payments(
     q: str, 
@@ -366,7 +271,6 @@ def search_payments(
         print("Error buscando pagos:", e)
         return JSONResponse(status_code=500, content={"detail": "Error interno"})
     
-
 @payment.get("/payment/pending")
 def get_usuarios_con_pagos_pendientes(
     limit: int = 50,
@@ -463,8 +367,6 @@ def get_usuarios_con_pagos_pendientes(
     finally:
         session.close()
 
-
-
 @payment.get("/payment/pending/search")
 def search_deudores(q: str, limit: int = 100):
     try:
@@ -547,8 +449,6 @@ def search_deudores(q: str, limit: int = 100):
         return JSONResponse(status_code=500, content={"detail": str(e)})
     finally:
         session.close()
-
-
 
 class InputPaginatedRequest(BaseModel):
     limit: int = 10
