@@ -35,3 +35,4 @@ typing_extensions==4.14.0
 uvicorn==0.34.3
 wheel==0.45.1
 cloudinary==1.41.0
+mercadopago==2.3.0
