@@ -314,9 +314,6 @@ def get_usuarios_con_pagos_pendientes(
         for est in estudiantes:
             if not est.userdetail:
                 continue
-                
-            # Carrera simple: tomar la de userdetail
-            carrera_nombre = est.userdetail.carer.name if est.userdetail.carer else "Sin carrera asignada"
             
             # Total pagos: contar SOLO si es necesario (o quitar este campo)
             total_pagos = (
@@ -333,7 +330,6 @@ def get_usuarios_con_pagos_pendientes(
                 "fullname": f"{est.userdetail.firstName} {est.userdetail.lastName}",
                 "email": est.userdetail.email,
                 "dni": est.userdetail.dni,
-                "carer": carrera_nombre,
                 "carer_id": est.userdetail.carer_id,
                 "total_pagos_realizados": total_pagos
             })
